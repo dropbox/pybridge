@@ -4,6 +4,7 @@
 
 """
 
+import android_log_redirect
 import json
 
 
@@ -16,18 +17,23 @@ def router(args):
     """
     values = json.loads(args)
 
+    ex = None
+    function = None
     try:
         function = routes[values.get('function')]
 
         status = 'ok'
         res = function(values)
-    except KeyError:
+    except KeyError as e:
         status = 'fail'
         res = None
+        ex = repr(e)
 
+    #print("Routed command: ", function, res)
     return json.dumps({
         'status': status,
         'result': res,
+        'ex': ex,
     })
 
 
@@ -51,3 +57,5 @@ routes = {
     'add': add,
     'mul': mul,
 }
+
+#print("bootstrap.py init completed")

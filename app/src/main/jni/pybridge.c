@@ -12,7 +12,9 @@
 #include <jni.h>
 #include <android/log.h>
 
-#define LOG(x) __android_log_write(ANDROID_LOG_INFO, "pybridge", (x))
+#define LOG(x) (void)(x)
+//#define LOG(x) __android_log_write(ANDROID_LOG_INFO, "pybridge", (x))
+#define LOG_ERR(x) __android_log_write(ANDROID_LOG_ERROR, "pybridge", (x))
 
 
 /* --------------- */
@@ -30,8 +32,20 @@ static PyObject *androidlog(PyObject *self, PyObject *args)
 }
 
 
+static PyObject *androidlogerr(PyObject *self, PyObject *args)
+{
+    char *str;
+    if (!PyArg_ParseTuple(args, "s", &str))
+        return NULL;
+
+    LOG_ERR(str);
+    Py_RETURN_NONE;
+}
+
+
 static PyMethodDef AndroidlogMethods[] = {
     {"log", androidlog, METH_VARARGS, "Logs to Android stdout"},
+    {"logerr", androidlogerr, METH_VARARGS, "Logs to Android stderr"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -48,29 +62,6 @@ static struct PyModuleDef AndroidlogModule = {
 PyMODINIT_FUNC PyInit_androidlog(void)
 {
     return PyModule_Create(&AndroidlogModule);
-}
-
-
-void setAndroidLog()
-{
-    // Inject  bootstrap code to redirect python stdin/stdout
-    // to the androidlog module
-    PyRun_SimpleString(
-            "import sys\n" \
-            "import androidlog\n" \
-            "class LogFile(object):\n" \
-            "    def __init__(self):\n" \
-            "        self.buffer = ''\n" \
-            "    def write(self, s):\n" \
-            "        s = self.buffer + s\n" \
-            "        lines = s.split(\"\\n\")\n" \
-            "        for l in lines[:-1]:\n" \
-            "            androidlog.log(l)\n" \
-            "        self.buffer = lines[-1]\n" \
-            "    def flush(self):\n" \
-            "        return\n" \
-            "sys.stdout = sys.stderr = LogFile()\n"
-    );
 }
 
 
@@ -107,10 +98,20 @@ JNIEXPORT jint JNICALL Java_com_jventura_pybridge_PyBridge_start
     // Initialize Python interpreter and logging
     PyImport_AppendInittab("androidlog", PyInit_androidlog);
     Py_Initialize();
-    setAndroidLog();
 
     // Bootstrap
     PyRun_SimpleString("import bootstrap");
+    if (PyErr_Occurred()) {
+        LOG_ERR("Python exception");
+        PyErr_PrintEx(0);
+    } else {
+        LOG("Python init success");
+    }
+
+    // Cleanup
+    (*env)->ReleaseStringUTFChars(env, path, pypath);
+    PyMem_RawFree(wchar_paths);
+
     return 0;
 }
 
@@ -142,19 +143,44 @@ JNIEXPORT jstring JNICALL Java_com_jventura_pybridge_PyBridge_call
     // Import module
     PyObject* myModuleString = PyUnicode_FromString((char*)"bootstrap");
     PyObject* myModule = PyImport_Import(myModuleString);
+    if (PyErr_Occurred()) {
+        LOG_ERR("Python module load exception");
+        PyErr_PrintEx(0);
+        return NULL;
+    } else {
+        LOG("Python module load success");
+    }
 
     // Get reference to the router function
     PyObject* myFunction = PyObject_GetAttrString(myModule, (char*)"router");
+    if (PyErr_Occurred()) {
+        LOG_ERR("Python function lookup exception");
+        PyErr_PrintEx(0);
+        return NULL;
+    } else {
+        LOG("Python function lookup success");
+    }
     PyObject* args = PyTuple_Pack(1, PyUnicode_FromString(payload_utf));
 
-    // Call function and get the resulting string
+    // Call function and check errors
     PyObject* myResult = PyObject_CallObject(myFunction, args);
+    if (!myResult && PyErr_Occurred()) {
+        LOG_ERR("Python call exception");
+        PyErr_PrintEx(0);
+        return NULL; // Don't bother cleaning up, since we're crashing.
+    } else if (!myResult) {
+        LOG_ERR("Python call null result");
+        return NULL;  // Don't bother cleaning up, since we're crashing.
+    } else {
+        LOG("Python call success");
+    }
+
+    // Call function and get the resulting string
     char *myResultChar = PyUnicode_AsUTF8(myResult);
 
     // We must copy the characters as we will lose the reference
     // to char *myResultChar when we DECREF PyObject* myResult
-    char *res = malloc(sizeof(char) * strlen(myResultChar) + 1);
-    strcpy(res, myResultChar);
+    jstring result = (*env)->NewStringUTF(env, myResultChar);
 
     // Cleanup
     (*env)->ReleaseStringUTFChars(env, payload, payload_utf);
@@ -164,7 +190,5 @@ JNIEXPORT jstring JNICALL Java_com_jventura_pybridge_PyBridge_call
     Py_DECREF(args);
     Py_DECREF(myResult);
 
-    // We do not need to free res as the JVM will eventually GC the jstring
-    jstring result = (*env)->NewStringUTF(env, res);
     return result;
 }

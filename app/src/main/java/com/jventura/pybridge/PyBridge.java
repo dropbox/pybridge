@@ -1,7 +1,9 @@
 package com.jventura.pybridge;
 
-import org.json.JSONObject;
+import android.util.Log;
+
 import org.json.JSONException;
+import org.json.JSONObject;
 
 
 public class PyBridge {
@@ -12,14 +14,26 @@ public class PyBridge {
      * @param datapath the location of the extracted python files
      * @return error code
      */
-    public static native int start(String datapath);
+    private static native int start(String datapath);
+    public static int timedStart(String datapath) {
+        Timer timer = new Timer("start");
+        int result = start(datapath);
+        timer.logTime();
+        return result;
+    }
 
     /**
      * Stops the Python interpreter.
      *
      * @return error code
      */
-    public static native int stop();
+    private static native int stop();
+    public static int timedStop() {
+        Timer timer = new Timer("stop");
+        int result = stop();
+        timer.logTime();
+        return result;
+    }
 
     /**
      * Sends a string payload to the Python interpreter.
@@ -27,7 +41,13 @@ public class PyBridge {
      * @param payload the payload string
      * @return a string with the result
      */
-    public static native String call(String payload);
+    private static native String call(String payload);
+    private static String timedCall(String payload) {
+        Timer timer = new Timer("call");
+        String result = call(payload);
+        timer.logTime();
+        return result;
+    }
 
     /**
      * Sends a JSON payload to the Python interpreter.
@@ -36,7 +56,10 @@ public class PyBridge {
      * @return JSON response
      */
     public static JSONObject call(JSONObject payload) {
-        String result = call(payload.toString());
+        String result = timedCall(payload.toString());
+        if (result == null) {
+            throw new RuntimeException("Python call failed.");
+        }
         try {
             return new JSONObject(result);
         } catch (JSONException e) {
